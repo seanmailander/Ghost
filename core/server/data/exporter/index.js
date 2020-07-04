@@ -59,6 +59,8 @@ exportTable = function exportTable(tableName, options) {
         (options.include && _.isArray(options.include) && options.include.indexOf(tableName) !== -1)) {
         const query = (options.transacting || db.knex)(tableName);
 
+        // TODO: return a readable stream
+        // See http://knexjs.org/#Interfaces-Streams
         return query.select();
     }
 };
