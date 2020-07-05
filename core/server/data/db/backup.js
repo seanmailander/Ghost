@@ -11,10 +11,29 @@ const exporter = require('../exporter');
 let writeExportFile;
 let backup;
 
-writeExportFile = function writeExportFile(exportResult) {
-    const filename = path.resolve(urlUtils.urlJoin(config.get('paths').contentPath, 'data', exportResult.filename));
+writeExportFile = async function writeExportFile(exportResult) {
+    const { data, filename } = exportResult;
+    const resolvedFilename = path.resolve(urlUtils.urlJoin(config.get('paths').contentPath, 'data', exportResult.filename));
 
-    return fs.writeFile(filename, JSON.stringify(exportResult.data)).return(filename);
+    const writeStream = fs.createWriteStream(resolvedFilename);
+
+    const pipe = data.pipe(writeStream);
+
+    pipe.on('close', function () {
+        logging.info('All done!');
+    });
+    pipe.on('finish', function () {
+        logging.info('Finish All done!');
+    });
+    data.on('close', function () {
+        logging.info('All done!');
+    });
+    data.on('finish', function () {
+        logging.info('Finish All done!');
+    });
+
+    // return fs.writeFile(filename, JSON.stringify(exportResult.data)).return(filename);
+    return resolvedFilename;
 };
 
 const readBackup = async (filename) => {
@@ -41,6 +60,8 @@ backup = function backup(options) {
     logging.info('Creating database backup');
     options = options || {};
 
+    // Pipes, not promises
+    
     const props = {
         data: exporter.doExport(options),
         filename: exporter.fileName(options)
