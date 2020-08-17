@@ -9,6 +9,7 @@ const errors = require('@tryghost/errors');
 const security = require('../../lib/security');
 const models = require('../../models');
 const EXCLUDED_TABLES = ['sessions', 'mobiledoc_revisions'];
+const stream = require('stream');
 
 const modelOptions = {context: {internal: true}};
 
@@ -59,9 +60,63 @@ exportTable = function exportTable(tableName, options) {
         (options.include && _.isArray(options.include) && options.include.indexOf(tableName) !== -1)) {
         const query = (options.transacting || db.knex)(tableName);
 
-        return query.select();
+        // TODO: return a readable stream
+        // See http://knexjs.org/#Interfaces-Streams
+        return query.select().stream();
     }
 };
+
+function joinedStream(...streams) {
+    function pipeNext() {
+        const nextStream = streams.shift();
+        if (nextStream) {
+            nextStream.pipe(out, {end: false});
+            nextStream.on('end', function () {
+                pipeNext();
+            });
+        } else {
+            out.end();
+        }
+    }
+    const out = new stream.PassThrough();
+    pipeNext();
+    return out;
+}
+
+async function * generateHeader(version) {
+    yield `{
+    "meta": {
+        "exported_on": ${new Date().getTime()},
+        "version": "${version}"
+    },
+    "data": {`;
+}
+
+async function * generateDataBlob(tableName, tableData) {
+    yield `
+        "${tableName}": [`;
+    
+    if (tableData !== undefined) {
+        let needsComma = false;
+        for await (const chunk of tableData) {
+            // logging.info(JSON.stringify(chunk));
+            if (needsComma) {
+                yield `,`;
+            }
+            yield JSON.stringify(chunk);
+            needsComma = true;
+        }
+    } else {
+        yield ` `;
+    }
+    yield `],`;
+}
+
+async function * generateFooter() {
+    yield `
+    }
+};`;
+}
 
 doExport = function doExport(options) {
     options = options || {include: []};
@@ -73,25 +128,21 @@ doExport = function doExport(options) {
         tables = result.tables;
         version = result.version;
 
-        return Promise.mapSeries(tables, function (tableName) {
+        return tables.map(function (tableName) {
             return exportTable(tableName, options);
         });
     }).then(function formatData(tableData) {
-        const exportData = {
-            meta: {
-                exported_on: new Date().getTime(),
-                version: version
-            },
-            data: {
-                // Filled below
-            }
-        };
-
-        _.each(tables, function (name, i) {
-            exportData.data[name] = tableData[i];
+        // stream in header
+        const headerStream = new stream.Readable.from(generateHeader(version));
+        
+        const tableStreams = tables.map(function (name, i) {
+            return new stream.Readable.from(generateDataBlob(name, tableData[i]));
         });
 
-        return exportData;
+        // stream in footer
+        const footerStream = new stream.Readable.from(generateFooter());
+
+        return joinedStream(headerStream, ...tableStreams, footerStream);
     }).catch(function (err) {
         return Promise.reject(new errors.DataExportError({
             err: err,
